@@ -49,6 +49,7 @@ describe 'PalletTopUp' do
 
           Fiber.yield
 
+          # item_count = zallet.items.count  # Why does this fix it?
           if item_count < 1
             zallet.items.create(name: "item", code: "item")
           end
