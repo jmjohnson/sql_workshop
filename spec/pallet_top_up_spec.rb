@@ -41,5 +41,21 @@ describe 'PalletTopUp' do
       pallet = Pallet.create(capacity: 10)
       9.times { |i| pallet.items.build(code: "item ##{i}") }
     end
+
+    it 'can use stale data to make decisions' do
+      #  Show that it can read a value inside a transaction, have that value changed and then write that value
+    end
+  end
+
+  context 'Repeatable Read' do
+    it 'prevents you from seeing an inconsistent view of the database' do
+      # it querys some value. another transaction changes that value.
+    end
+
+    it 'it cannot see inserts from other transactions'
+  end
+
+  context 'Serializable' do
+    it 'aborts transactions that didnt see a perfect view of the database'
   end
 end
