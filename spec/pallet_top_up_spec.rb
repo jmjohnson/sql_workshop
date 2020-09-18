@@ -38,8 +38,33 @@ describe 'PalletTopUp' do
     end
 
     it 'can overfill pallets' do
-      pallet = Pallet.create(capacity: 10)
-      9.times { |i| pallet.items.build(code: "item ##{i}") }
+      pallet = Pallet.create(capacity: 1)
+      pallet_id = pallet.id
+
+      insert_item_proc = proc do
+        zallet = Pallet.includes(:items).find(pallet_id)
+        zallet.transaction do
+          zallet.reload
+          item_count = zallet.items.count
+
+          Fiber.yield
+
+          if item_count < 1
+            zallet.items.create(name: "item", code: "item")
+          end
+        end
+      end
+
+      t1 = Fiber.new &insert_item_proc
+      t2 = Fiber.new &insert_item_proc
+
+      t1.resume
+      t2.resume
+
+      t1.resume
+      t2.resume
+
+      expect(pallet.reload.items.count).to eq(1)
     end
 
     it 'can use stale data to make decisions' do
