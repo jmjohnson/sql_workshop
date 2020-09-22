@@ -3,6 +3,7 @@ require 'rspec'
 require 'spec_helper.rb'
 
 describe 'PalletTopUp' do
+  let(:connection_pool) { ActiveRecord::Base.connection_pool }
   before do
     # Do nothing
   end
@@ -74,8 +75,71 @@ describe 'PalletTopUp' do
   end
 
   context 'Repeatable Read' do
-    it 'prevents you from seeing an inconsistent view of the database' do
-      # it querys some value. another transaction changes that value.
+    before do
+      Pallet.connection.execute(<<~SQL)
+        SET TRANSACTION ISOLATION LEVEL REPEATABLE READ
+      SQL
+    end
+
+    it 'fails due to a concurrent update' do
+      Pallet.create!(capacity: 1)
+      interfering_txn = Fiber.new do
+        ctx = connection_pool.checkout
+        puts "ctx t1 #{ctx.object_id}"
+
+        ctx.execute <<~SQL
+          BEGIN;
+        SQL
+
+        ctx.execute <<~SQL
+          SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+        SQL
+
+        # Acquire a lock (which?) on the only pallet
+        ctx.execute <<~SQL
+          UPDATE pallets SET capacity = capacity + 1 WHERE capacity = 1;
+        SQL
+
+        ctx.execute <<~SQL
+          COMMIT;
+        SQL
+
+        connection_pool.checkin(ctx)
+      end
+
+      main_txn = Fiber.new do
+        ctx = connection_pool.checkout
+        puts "ctx t2 #{ctx.object_id}"
+
+        ctx.execute <<~SQL
+          BEGIN;
+        SQL
+
+        ctx.execute <<~SQL
+          SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+        SQL
+
+        #  First non-transaction control statement triggers the snapshot.
+        ctx.execute <<~SQL
+          SELECT 0;
+        SQL
+
+        # Other transaction commits an update it just did
+        interfering_txn.resume
+
+        # First difference from read committed.
+        ctx.execute <<~SQL
+          UPDATE pallets SET capacity = capacity + 1;
+        SQL
+
+        ctx.execute <<~SQL
+          COMMIT;
+        SQL
+
+        connection_pool.checkin(ctx)
+      end
+
+      main_txn.resume
     end
 
     it 'it cannot see inserts from other transactions'
