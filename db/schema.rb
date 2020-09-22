@@ -27,6 +27,7 @@ ActiveRecord::Schema.define(version: 2020_09_18_162722) do
 
   create_table "skus", force: :cascade do |t|
     t.string "code"
+    t.string "name"
   end
 
 end
