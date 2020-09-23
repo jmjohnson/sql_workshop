@@ -81,8 +81,6 @@ describe 'PalletTopUp' do
       Pallet.create!(capacity: 1)
       interfering_txn = Fiber.new do
         with_fresh_connection do |ctx|
-          puts "ctx t1 #{ctx.object_id}"
-
           ctx.execute <<~SQL
             BEGIN;
           SQL
@@ -104,8 +102,6 @@ describe 'PalletTopUp' do
 
       main_txn = Fiber.new do
         with_fresh_connection do |ctx|
-          puts "ctx t2 #{ctx.object_id}"
-
           ctx.execute <<~SQL
             BEGIN;
           SQL
