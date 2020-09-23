@@ -4,14 +4,6 @@ require 'spec_helper.rb'
 
 describe 'PalletTopUp' do
   let(:connection_pool) { ActiveRecord::Base.connection_pool }
-  before do
-    # Do nothing
-  end
-
-  after do
-    # Do nothing
-  end
-
   # Now... have something that gets a pallet. Checks if it has capacity, then inserts an item.
   # -- Demonstrate how this works with diff transaction isolation levels
 
@@ -75,68 +67,71 @@ describe 'PalletTopUp' do
   end
 
   context 'Repeatable Read' do
-    before do
-      Pallet.connection.execute(<<~SQL)
-        SET TRANSACTION ISOLATION LEVEL REPEATABLE READ
-      SQL
+    def connection_pool;
+      ActiveRecord::Base.connection_pool;
+    end
+
+    def with_fresh_connection;
+      yield ctx = connection_pool.checkout;
+    ensure
+      connection_pool.checkin(ctx)
     end
 
     it 'fails due to a concurrent update' do
       Pallet.create!(capacity: 1)
       interfering_txn = Fiber.new do
-        ctx = connection_pool.checkout
-        puts "ctx t1 #{ctx.object_id}"
+        with_fresh_connection do |ctx|
+          puts "ctx t1 #{ctx.object_id}"
 
-        ctx.execute <<~SQL
-          BEGIN;
-        SQL
+          ctx.execute <<~SQL
+            BEGIN;
+          SQL
 
-        ctx.execute <<~SQL
-          SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
-        SQL
+          ctx.execute <<~SQL
+            SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+          SQL
 
-        # Acquire a lock (which?) on the only pallet
-        ctx.execute <<~SQL
-          UPDATE pallets SET capacity = capacity + 1 WHERE capacity = 1;
-        SQL
+          # Acquire a lock (which?) on the only pallet
+          ctx.execute <<~SQL
+            UPDATE pallets SET capacity = capacity + 1 WHERE capacity = 1;
+          SQL
 
-        ctx.execute <<~SQL
-          COMMIT;
-        SQL
-
-        connection_pool.checkin(ctx)
+          ctx.execute <<~SQL
+            COMMIT;
+          SQL
+        end
       end
 
       main_txn = Fiber.new do
-        ctx = connection_pool.checkout
-        puts "ctx t2 #{ctx.object_id}"
+        with_fresh_connection do |ctx|
+          puts "ctx t2 #{ctx.object_id}"
 
-        ctx.execute <<~SQL
-          BEGIN;
-        SQL
+          ctx.execute <<~SQL
+            BEGIN;
+          SQL
 
-        ctx.execute <<~SQL
-          SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
-        SQL
+          ctx.execute <<~SQL
+            SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+          SQL
 
-        #  First non-transaction control statement triggers the snapshot.
+          #  First non-transaction control statement triggers the snapshot.
         ctx.execute <<~SQL
-          SELECT 0;
+            SELECT 0;
         SQL
 
         # Other transaction commits an update it just did
         interfering_txn.resume
 
-        # First difference from read committed.
-        ctx.execute <<~SQL
-          UPDATE pallets SET capacity = capacity + 1;
-        SQL
+          # First difference from read committed.
+          ctx.execute <<~SQL
+            UPDATE pallets SET capacity = capacity + 1;
+          SQL
 
-        ctx.execute <<~SQL
-          COMMIT;
-        SQL
+          ctx.execute <<~SQL
+            COMMIT;
+          SQL
 
-        connection_pool.checkin(ctx)
+        end
       end
 
       expect { main_txn.resume }.to raise_exception(ActiveRecord::SerializationFailure)
