@@ -139,9 +139,7 @@ describe 'PalletTopUp' do
         connection_pool.checkin(ctx)
       end
 
-      expect do
-        main_txn.resume
-      end.to raise_exception(ActiveRecord::SerializationFailure)
+      expect { main_txn.resume }.to raise_exception(ActiveRecord::SerializationFailure)
     end
 
     it 'it cannot see inserts from other transactions'
