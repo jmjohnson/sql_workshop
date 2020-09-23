@@ -67,15 +67,9 @@ describe 'PalletTopUp' do
   end
 
   context 'Repeatable Read' do
-    def connection_pool;
-      ActiveRecord::Base.connection_pool;
-    end
 
-    def with_fresh_connection;
-      yield ctx = connection_pool.checkout;
-    ensure
-      connection_pool.checkin(ctx)
-    end
+    def connection_pool; ActiveRecord::Base.connection_pool; end
+    def with_fresh_connection; yield ctx = connection_pool.checkout; ensure connection_pool.checkin(ctx) end
 
     it 'fails due to a concurrent update' do
       Pallet.create!(capacity: 1)
