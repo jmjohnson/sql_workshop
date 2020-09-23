@@ -97,20 +97,16 @@ describe 'PalletTopUp' do
       main_txn = Fiber.new do
         with_fresh_connection do |ctx|
           ctx.execute <<~SQL
-            BEGIN;
-          SQL
-
-          ctx.execute <<~SQL
-            SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+            BEGIN; SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
           SQL
 
           #  First non-transaction control statement triggers the snapshot.
-        ctx.execute <<~SQL
+          ctx.execute <<~SQL
             SELECT 0;
-        SQL
+          SQL
 
-        # Other transaction commits an update it just did
-        interfering_txn.resume
+          # Other transaction commits an update to a row we are about to update ourselves.
+          interfering_txn.resume
 
           # First difference from read committed.
           ctx.execute <<~SQL
