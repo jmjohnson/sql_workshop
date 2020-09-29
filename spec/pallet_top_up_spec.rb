@@ -34,31 +34,65 @@ describe 'PalletTopUp' do
       pallet = Pallet.create(capacity: 1)
       pallet_id = pallet.id
 
-      insert_item_proc = proc do
-        zallet = Pallet.includes(:items).find(pallet_id)
-        zallet.transaction do
-          zallet.reload
-          item_count = zallet.items.count
+      interfering_txn = Fiber.new do
+        with_fresh_connection do |ctx|
+          ctx.execute <<~SQL
+            BEGIN;
+          SQL
 
-          Fiber.yield
+          ctx.execute <<~SQL
+            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+          SQL
 
-          # item_count = zallet.items.count  # Why does this fix it?
-          if item_count < 1
-            zallet.items.create(name: "item", code: "item")
+          capacity = ctx.execute(<<~SQL)
+            SELECT capacity FROM pallets WHERE id = #{pallet_id}
+          SQL
+            .then { |result| result.to_a.first["capacity"] }
+
+          if capacity > 0
+            ctx.execute <<~SQL
+              UPDATE pallets SET capacity = #{capacity + 1} WHERE id = #{pallet_id}
+            SQL
           end
+
+          ctx.execute <<~SQL
+            COMMIT;
+          SQL
         end
       end
 
-      t1 = Fiber.new &insert_item_proc
-      t2 = Fiber.new &insert_item_proc
+      main_txn = Fiber.new do
+        with_fresh_connection do |ctx|
+          ctx.execute <<~SQL
+            BEGIN;
+          SQL
 
-      t1.resume
-      t2.resume
+          ctx.execute <<~SQL
+            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+          SQL
 
-      t1.resume
-      t2.resume
+          capacity = ctx.execute(<<~SQL)
+            SELECT capacity FROM pallets WHERE id = #{pallet_id}
+          SQL
+            .then { |result| result.to_a.first["capacity"] }
 
-      expect(pallet.reload.items.count).to eq(1)
+          interfering_txn.resume
+
+          if capacity > 0
+            ctx.execute <<~SQL
+              UPDATE pallets SET capacity = #{capacity - 1} WHERE id = #{pallet_id}
+            SQL
+          end
+
+          ctx.execute <<~SQL
+            COMMIT;
+          SQL
+        end
+      end
+
+      main_txn.resume
+
+      expect(pallet.reload.capacity).to eq(1)
     end
 
     it 'can use stale data to make decisions' do
@@ -66,10 +100,10 @@ describe 'PalletTopUp' do
     end
   end
 
-  context 'Repeatable Read' do
+  def connection_pool; ActiveRecord::Base.connection_pool; end
+  def with_fresh_connection; yield ctx = connection_pool.checkout; ensure connection_pool.checkin(ctx) end
 
-    def connection_pool; ActiveRecord::Base.connection_pool; end
-    def with_fresh_connection; yield ctx = connection_pool.checkout; ensure connection_pool.checkin(ctx) end
+  context 'Repeatable Read' do
 
     it 'fails due to a concurrent update' do
       Pallet.create!(capacity: 1)
