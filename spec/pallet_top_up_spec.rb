@@ -92,6 +92,10 @@ describe 'PalletTopUp' do
 
       main_txn.resume
 
+      # Why is the interfering transaction's update lost?
+      # How would optimistic locking look?
+      # Lesson: Read Committed transaction isolation pretty much just makes sure your writes are atomic, they
+      # guarantee no consistent view of the database between select statements.
       expect(pallet.reload.capacity).to eq(1)
     end
 
