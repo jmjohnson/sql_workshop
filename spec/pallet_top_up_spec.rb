@@ -86,6 +86,34 @@ class IncrementingTxn < TxnHelper
   end
 end
 
+def peek_on_capacity(pallet_id)
+  TxnHelper.new do
+    with_fresh_connection do |ctx|
+      ctx.execute <<~SQL
+        BEGIN;
+        SET statement_timeout = '1s';
+      SQL
+
+      ctx.execute <<~SQL
+        SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+      SQL
+
+      puts "about to search for capacity"
+      capacity = ctx.execute(<<~SQL)
+        SELECT capacity FROM pallets WHERE id = #{pallet_id}
+      SQL
+        .then { |result| result.to_a.first["capacity"] }
+
+      puts "user txn found capacity: #{capacity}"
+
+      sleep 1
+      ctx.execute <<~SQL
+          COMMIT;
+      SQL
+    end
+  end
+end
+
 describe 'PalletTopUp' do
   let(:connection_pool) { ActiveRecord::Base.connection_pool }
   # Now... have something that gets a pallet. Checks if it has capacity, then inserts an item.
@@ -187,83 +215,46 @@ describe 'PalletTopUp' do
       expect(pallet.reload.capacity).to eq(40)
     end
 
-    it 'can be blocked by other transactions' do
+    it 'the order of query arrival can greatly influence execution time' do
       # What's the useful bit of this example anyway? What do I want to teach?
       # -> That lock timeouts are good. That our application doesn't use them. That your query can hang and time out
-      # your web request.
+      # other's web request.
       #
-      # Make this example such that: you start a long running transaction, which kills a few queries that follow it.
+      # Make this example such that: The order in which queries arrive demonstrates big differences in completion time.
       pallet = Pallet.create(capacity: 0)
       pallet_id = pallet.id
-      test_start = DateTime.now
+      txn1, txn2 = [peek_on_capacity(pallet_id)] * 2
 
-      interfering_txn = Fiber.new do
-        with_fresh_connection do |ctx|
-          ctx.execute <<~SQL
-            BEGIN;
-          SQL
+      with_fresh_connection do |ctx|
+        ctx.execute <<~SQL
+          BEGIN;
+        SQL
 
-          ctx.execute <<~SQL
-            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
-          SQL
+        ctx.execute <<~SQL
+          SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+        SQL
 
-          capacity = ctx.execute(<<~SQL)
-            SELECT capacity FROM pallets WHERE id = #{pallet_id}
-          SQL
-            .then { |result| result.to_a.first["capacity"] }
 
-          # Pallet has extension attached, increasing its capacity.
-          ctx.execute <<~SQL
-            UPDATE pallets SET capacity = #{capacity} + 20 WHERE id = #{pallet_id}
-          SQL
+        txn1.start
+        sleep 1
 
-          Thread.new do
-            sleep 5
-            ctx.execute <<~SQL
-              COMMIT;
-            SQL
-          end
-        end
+        ctx.execute(<<~SQL)
+          ALTER TABLE pallets ADD COLUMN zorph INT;
+        SQL
+        puts "LOCKED and altering table!"
+        # While it's hard at work...
+        txn2.start
+        sleep 2
+
+        puts "about to rollback"
+        ctx.execute <<~SQL
+          ROLLBACK;
+        SQL
       end
 
-      main_txn = Fiber.new do
-        with_fresh_connection do |ctx|
-          ctx.execute <<~SQL
-            BEGIN;
-          SQL
-
-          ctx.execute <<~SQL
-            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
-          SQL
-
-          capacity = ctx.execute(<<~SQL)
-            SELECT capacity FROM pallets WHERE id = #{pallet_id}
-          SQL
-            .then { |result| result.to_a.first["capacity"] }
-
-          begin
-            interfering_txn.resume
-          rescue FiberError
-          end
-
-          ctx.execute <<~SQL
-            UPDATE pallets SET capacity = #{capacity} + 20 WHERE id = #{pallet_id}
-          SQL
-
-          ctx.execute <<~SQL
-            COMMIT;
-          SQL
-        end
-      end
-
-      main_txn.resume
-
-      # Make the expectation pass. You may not change the lock timeouts, sleep statements, or the interfearing
-      # transaction.
-
-      # Change the code such that this expectation passes. (changing the expectation is automatic fail in case that's
-      # not clear)
-      expect(pallet.reload.capacity).to eq(40)
+      txn2.join
+      txn1.join
+      # Why does the ALTER TABLE make txn2 wait? It's only querying a field that the ALTER doesn't touch.
     end
 
     context 'with explicit locking' do
