@@ -24,11 +24,6 @@ describe 'PalletTopUp' do
   # Side idea: pallet has a "vacancy number" the app tries to update
 
   context 'Read Committed' do
-    before do
-      Pallet.connection.execute(<<~SQL)
-        SET TRANSACTION ISOLATION LEVEL READ COMMITTED
-      SQL
-    end
 
     it 'can overfill pallets' do
       pallet = Pallet.create(capacity: 1)
@@ -51,7 +46,7 @@ describe 'PalletTopUp' do
 
           if capacity > 0
             ctx.execute <<~SQL
-              UPDATE pallets SET capacity = #{capacity + 1} WHERE id = #{pallet_id}
+              UPDATE pallets SET capacity = capacity - 1 WHERE id = #{pallet_id}
             SQL
           end
 
@@ -80,7 +75,7 @@ describe 'PalletTopUp' do
 
           if capacity > 0
             ctx.execute <<~SQL
-              UPDATE pallets SET capacity = #{capacity - 1} WHERE id = #{pallet_id}
+              UPDATE pallets SET capacity = capacity - 1 WHERE id = #{pallet_id}
             SQL
           end
 
@@ -92,11 +87,13 @@ describe 'PalletTopUp' do
 
       main_txn.resume
 
-      # Why is the interfering transaction's update lost?
-      # How would optimistic locking look?
+      # Why didn't the interfearing transaction wait? The main transaction had already selected the row!
       # Lesson: Read Committed transaction isolation pretty much just makes sure your writes are atomic, they
       # guarantee no consistent view of the database between select statements.
-      expect(pallet.reload.capacity).to eq(1)
+
+      # Change the code such that this expectation passes. (changing the expectation is automatic fail in case that's
+      # not clear)
+      expect(pallet.reload.capacity).to eq(0)
     end
 
     it 'can use stale data to make decisions' do
