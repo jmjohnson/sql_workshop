@@ -161,6 +161,84 @@ describe 'PalletTopUp' do
       # not clear)
       expect(pallet.reload.capacity).to eq(40)
     end
+
+    it 'can be blocked by other transactions' do
+      # What's the useful bit of this example anyway? What do I want to teach?
+      # -> That lock timeouts are good. That our application doesn't use them. That your query can hang and time out
+      # your web request.
+      pallet = Pallet.create(capacity: 0)
+      pallet_id = pallet.id
+      test_start = DateTime.now
+
+      interfering_txn = Fiber.new do
+        with_fresh_connection do |ctx|
+          ctx.execute <<~SQL
+            BEGIN;
+          SQL
+
+          ctx.execute <<~SQL
+            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+          SQL
+
+          capacity = ctx.execute(<<~SQL)
+            SELECT capacity FROM pallets WHERE id = #{pallet_id}
+          SQL
+            .then { |result| result.to_a.first["capacity"] }
+
+          # Pallet has extension attached, increasing its capacity.
+          ctx.execute <<~SQL
+            UPDATE pallets SET capacity = #{capacity} + 20 WHERE id = #{pallet_id}
+          SQL
+
+          Thread.new do
+            sleep 5
+            ctx.execute <<~SQL
+              COMMIT;
+            SQL
+          end
+        end
+      end
+
+      main_txn = Fiber.new do
+        with_fresh_connection do |ctx|
+          ctx.execute <<~SQL
+            BEGIN;
+          SQL
+
+          ctx.execute <<~SQL
+            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+          SQL
+
+          capacity = ctx.execute(<<~SQL)
+            SELECT capacity FROM pallets WHERE id = #{pallet_id}
+          SQL
+            .then { |result| result.to_a.first["capacity"] }
+
+          begin
+            interfering_txn.resume
+          rescue FiberError
+          end
+
+          ctx.execute <<~SQL
+            UPDATE pallets SET capacity = #{capacity} + 20 WHERE id = #{pallet_id}
+          SQL
+
+          ctx.execute <<~SQL
+            COMMIT;
+          SQL
+        end
+      end
+
+      main_txn.resume
+
+      # Make the expectation pass. You may not change the lock timeouts, sleep statements, or the interfearing
+      # transaction.
+
+      # Change the code such that this expectation passes. (changing the expectation is automatic fail in case that's
+      # not clear)
+      expect(pallet.reload.capacity).to eq(40)
+      expect(DateTime.now - test_start).to
+    end
   end
 
   def connection_pool; ActiveRecord::Base.connection_pool; end
