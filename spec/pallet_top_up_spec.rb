@@ -53,6 +53,39 @@ class DecrementingTxn < TxnHelper
   end
 end
 
+class IncrementingTxn < TxnHelper
+  def initialize(pallet_id, by: 1)
+    update = Proc.new do
+      with_fresh_connection do |ctx|
+        ctx.execute <<~SQL
+          BEGIN;
+        SQL
+
+        ctx.execute <<~SQL
+          SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+        SQL
+
+        capacity = ctx.execute(<<~SQL)
+          SELECT capacity FROM pallets WHERE id = #{pallet_id}
+        SQL
+          .then { |result| result.to_a.first["capacity"] }
+
+        if capacity > 0
+          ctx.execute <<~SQL
+            UPDATE pallets SET capacity = #{capacity} - #{by} WHERE id = #{pallet_id}
+          SQL
+        end
+
+        ctx.execute <<~SQL
+          COMMIT;
+        SQL
+      end
+    end
+
+    super(&update)
+  end
+end
+
 describe 'PalletTopUp' do
   let(:connection_pool) { ActiveRecord::Base.connection_pool }
   # Now... have something that gets a pallet. Checks if it has capacity, then inserts an item.
@@ -121,65 +154,36 @@ describe 'PalletTopUp' do
       pallet = Pallet.create(capacity: 0)
       pallet_id = pallet.id
 
-      interfering_txn = Fiber.new do
-        with_fresh_connection do |ctx|
-          ctx.execute <<~SQL
-            BEGIN;
-          SQL
+      interfering_txn = IncrementingTxn.new(pallet_id, by: 20)
 
-          ctx.execute <<~SQL
-            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
-          SQL
+      with_fresh_connection do |ctx|
+        ctx.execute <<~SQL
+          BEGIN;
+        SQL
 
-          capacity = ctx.execute(<<~SQL)
-            SELECT capacity FROM pallets WHERE id = #{pallet_id}
-          SQL
-            .then { |result| result.to_a.first["capacity"] }
+        ctx.execute <<~SQL
+          SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+        SQL
 
-          # Pallet has extension attached, increasing its capacity.
-          ctx.execute <<~SQL
-            UPDATE pallets SET capacity = #{capacity} + 20 WHERE id = #{pallet_id}
-          SQL
+        capacity = ctx.execute(<<~SQL)
+          SELECT capacity FROM pallets WHERE id = #{pallet_id}
+        SQL
+          .then { |result| result.to_a.first["capacity"] }
 
-          ctx.execute <<~SQL
-            COMMIT;
-          SQL
-        end
+        interfering_txn.run_to_end
+
+        ctx.execute <<~SQL
+          UPDATE pallets SET capacity = #{capacity} + 20 WHERE id = #{pallet_id}
+        SQL
+
+        ctx.execute <<~SQL
+          COMMIT;
+        SQL
       end
-
-      main_txn = Fiber.new do
-        with_fresh_connection do |ctx|
-          ctx.execute <<~SQL
-            BEGIN;
-          SQL
-
-          ctx.execute <<~SQL
-            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
-          SQL
-
-          capacity = ctx.execute(<<~SQL)
-            SELECT capacity FROM pallets WHERE id = #{pallet_id}
-          SQL
-            .then { |result| result.to_a.first["capacity"] }
-
-          interfering_txn.resume
-
-          ctx.execute <<~SQL
-            UPDATE pallets SET capacity = #{capacity} + 20 WHERE id = #{pallet_id}
-          SQL
-
-          ctx.execute <<~SQL
-            COMMIT;
-          SQL
-        end
-      end
-
-      main_txn.resume
 
       # Why was the update lost here?
 
-      # Change the code such that this expectation passes. (changing the expectation is automatic fail in case that's
-      # not clear)
+      # Change the code such that this expectation passes.
       expect(pallet.reload.capacity).to eq(40)
     end
 
