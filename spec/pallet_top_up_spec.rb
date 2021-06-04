@@ -166,6 +166,8 @@ describe 'PalletTopUp' do
       # What's the useful bit of this example anyway? What do I want to teach?
       # -> That lock timeouts are good. That our application doesn't use them. That your query can hang and time out
       # your web request.
+      #
+      # Make this example such that: you start a long running transaction, which kills a few queries that follow it.
       pallet = Pallet.create(capacity: 0)
       pallet_id = pallet.id
       test_start = DateTime.now
@@ -237,7 +239,6 @@ describe 'PalletTopUp' do
       # Change the code such that this expectation passes. (changing the expectation is automatic fail in case that's
       # not clear)
       expect(pallet.reload.capacity).to eq(40)
-      expect(DateTime.now - test_start).to
     end
 
     context 'with explicit locking' do
