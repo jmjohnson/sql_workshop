@@ -239,6 +239,82 @@ describe 'PalletTopUp' do
       expect(pallet.reload.capacity).to eq(40)
       expect(DateTime.now - test_start).to
     end
+
+    context 'with explicit locking' do
+      # https://www.postgresql.org/docs/11/explicit-locking.html
+
+      it 'can take out a lock at select time' do
+        # https://www.postgresql.org/docs/11/sql-select.html#SQL-FOR-UPDATE-SHARE
+        pallet = Pallet.create(capacity: 1)
+        pallet_id = pallet.id
+
+        interfering_txn = Proc.new do
+          Thread.new do
+            with_fresh_connection do |ctx|
+              ctx.execute <<~SQL
+                BEGIN;
+              SQL
+
+              ctx.execute <<~SQL
+                SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+              SQL
+
+              capacity = ctx.execute(<<~SQL)
+                SELECT capacity FROM pallets WHERE id = #{pallet_id}
+              SQL
+                .then { |result| result.to_a.first["capacity"] }
+
+              puts "interferer #{capacity}"
+              if capacity > 0
+                ctx.execute <<~SQL
+                  UPDATE pallets SET capacity = capacity - 1 WHERE id = #{pallet_id}
+                SQL
+              end
+
+              ctx.execute <<~SQL
+                COMMIT;
+              SQL
+            end
+          end
+        end
+
+        main_txn = Fiber.new do
+          with_fresh_connection do |ctx|
+            ctx.execute <<~SQL
+              BEGIN;
+            SQL
+
+            ctx.execute <<~SQL
+              SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+            SQL
+
+            capacity = ctx.execute(<<~SQL)
+              SELECT capacity FROM pallets WHERE id = #{pallet_id} FOR UPDATE
+            SQL
+              .then { |result| result.to_a.first["capacity"] }
+
+            thread = interfering_txn.call
+            sleep 3
+
+            ctx.execute <<~SQL
+              UPDATE pallets SET capacity = capacity - 1 WHERE id = #{pallet_id}
+            SQL
+
+            ctx.execute <<~SQL
+              COMMIT;
+            SQL
+            thread.join
+          end
+        end
+
+        main_txn.resume
+
+        # Why does this spec fail right now? We select FOR UPDATE, shouldn't that prevent the interfearing
+        # transaction from reading them?
+
+        expect(pallet.reload.capacity).to eq(0)
+      end
+    end
   end
 
   def connection_pool; ActiveRecord::Base.connection_pool; end
