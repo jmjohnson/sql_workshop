@@ -2,6 +2,57 @@ require 'rails_helper'
 require 'rspec'
 require 'spec_helper.rb'
 
+class TxnHelper
+  def initialize(&block)
+    @callable = block
+  end
+
+  def start
+    @thread = Thread.new { @callable.call }
+  end
+
+  def join
+    @thread.join
+  end
+
+  def run_to_end
+    start.join
+  end
+end
+
+class DecrementingTxn < TxnHelper
+  def initialize(pallet_id)
+    update = Proc.new do
+      with_fresh_connection do |ctx|
+        ctx.execute <<~SQL
+          BEGIN;
+        SQL
+
+        ctx.execute <<~SQL
+          SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+        SQL
+
+        capacity = ctx.execute(<<~SQL)
+          SELECT capacity FROM pallets WHERE id = #{pallet_id}
+        SQL
+          .then { |result| result.to_a.first["capacity"] }
+
+        if capacity > 0
+          ctx.execute <<~SQL
+            UPDATE pallets SET capacity = capacity - 1 WHERE id = #{pallet_id}
+          SQL
+        end
+
+        ctx.execute <<~SQL
+          COMMIT;
+        SQL
+      end
+    end
+
+    super(&update)
+  end
+end
+
 describe 'PalletTopUp' do
   let(:connection_pool) { ActiveRecord::Base.connection_pool }
   # Now... have something that gets a pallet. Checks if it has capacity, then inserts an item.
@@ -29,70 +80,40 @@ describe 'PalletTopUp' do
       pallet = Pallet.create(capacity: 1)
       pallet_id = pallet.id
 
-      interfering_txn = Fiber.new do
-        with_fresh_connection do |ctx|
+      interfering_txn = DecrementingTxn.new(pallet_id)
+
+      with_fresh_connection do |ctx|
+        ctx.execute <<~SQL
+          BEGIN;
+        SQL
+
+        ctx.execute <<~SQL
+          SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+        SQL
+
+        capacity = ctx.execute(<<~SQL)
+          SELECT capacity FROM pallets WHERE id = #{pallet_id}
+        SQL
+          .then { |result| result.to_a.first["capacity"] }
+
+        interfering_txn.run_to_end
+
+        if capacity > 0
           ctx.execute <<~SQL
-            BEGIN;
-          SQL
-
-          ctx.execute <<~SQL
-            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
-          SQL
-
-          capacity = ctx.execute(<<~SQL)
-            SELECT capacity FROM pallets WHERE id = #{pallet_id}
-          SQL
-            .then { |result| result.to_a.first["capacity"] }
-
-          if capacity > 0
-            ctx.execute <<~SQL
-              UPDATE pallets SET capacity = capacity - 1 WHERE id = #{pallet_id}
-            SQL
-          end
-
-          ctx.execute <<~SQL
-            COMMIT;
+            UPDATE pallets SET capacity = capacity - 1 WHERE id = #{pallet_id}
           SQL
         end
+
+        ctx.execute <<~SQL
+          COMMIT;
+        SQL
       end
-
-      main_txn = Fiber.new do
-        with_fresh_connection do |ctx|
-          ctx.execute <<~SQL
-            BEGIN;
-          SQL
-
-          ctx.execute <<~SQL
-            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
-          SQL
-
-          capacity = ctx.execute(<<~SQL)
-            SELECT capacity FROM pallets WHERE id = #{pallet_id}
-          SQL
-            .then { |result| result.to_a.first["capacity"] }
-
-          interfering_txn.resume
-
-          if capacity > 0
-            ctx.execute <<~SQL
-              UPDATE pallets SET capacity = capacity - 1 WHERE id = #{pallet_id}
-            SQL
-          end
-
-          ctx.execute <<~SQL
-            COMMIT;
-          SQL
-        end
-      end
-
-      main_txn.resume
 
       # Why didn't the interfearing transaction wait? The main transaction had already selected the row!
       # Lesson: Read Committed transaction isolation pretty much just makes sure your writes are atomic, they
       # guarantee no consistent view of the database between select statements.
 
-      # Change the code such that this expectation passes. (changing the expectation is automatic fail in case that's
-      # not clear)
+      # Change the code such that this expectation passes.
       expect(pallet.reload.capacity).to eq(0)
     end
 
@@ -319,9 +340,6 @@ describe 'PalletTopUp' do
     end
   end
 
-  def connection_pool; ActiveRecord::Base.connection_pool; end
-  def with_fresh_connection; yield ctx = connection_pool.checkout; ensure connection_pool.checkin(ctx) end
-
   context 'Repeatable Read' do
 
     it 'fails due to a concurrent update' do
@@ -382,4 +400,14 @@ describe 'PalletTopUp' do
   context 'Serializable' do
     it 'aborts transactions that didnt see a perfect view of the database'
   end
+end
+
+def connection_pool
+  ActiveRecord::Base.connection_pool;
+end
+
+def with_fresh_connection
+  yield ctx = connection_pool.checkout;
+ensure
+  connection_pool.checkin(ctx)
 end
