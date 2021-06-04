@@ -96,8 +96,70 @@ describe 'PalletTopUp' do
       expect(pallet.reload.capacity).to eq(0)
     end
 
-    it 'can use stale data to make decisions' do
-      #  Show that it can read a value inside a transaction, have that value changed and then write that value
+    it 'can lose updates' do
+      pallet = Pallet.create(capacity: 0)
+      pallet_id = pallet.id
+
+      interfering_txn = Fiber.new do
+        with_fresh_connection do |ctx|
+          ctx.execute <<~SQL
+            BEGIN;
+          SQL
+
+          ctx.execute <<~SQL
+            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+          SQL
+
+          capacity = ctx.execute(<<~SQL)
+            SELECT capacity FROM pallets WHERE id = #{pallet_id}
+          SQL
+            .then { |result| result.to_a.first["capacity"] }
+
+          # Pallet has extension attached, increasing its capacity.
+          ctx.execute <<~SQL
+            UPDATE pallets SET capacity = #{capacity} + 20 WHERE id = #{pallet_id}
+          SQL
+
+          ctx.execute <<~SQL
+            COMMIT;
+          SQL
+        end
+      end
+
+      main_txn = Fiber.new do
+        with_fresh_connection do |ctx|
+          ctx.execute <<~SQL
+            BEGIN;
+          SQL
+
+          ctx.execute <<~SQL
+            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+          SQL
+
+          capacity = ctx.execute(<<~SQL)
+            SELECT capacity FROM pallets WHERE id = #{pallet_id}
+          SQL
+            .then { |result| result.to_a.first["capacity"] }
+
+          interfering_txn.resume
+
+          ctx.execute <<~SQL
+            UPDATE pallets SET capacity = #{capacity} + 20 WHERE id = #{pallet_id}
+          SQL
+
+          ctx.execute <<~SQL
+            COMMIT;
+          SQL
+        end
+      end
+
+      main_txn.resume
+
+      # Why was the update lost here?
+
+      # Change the code such that this expectation passes. (changing the expectation is automatic fail in case that's
+      # not clear)
+      expect(pallet.reload.capacity).to eq(40)
     end
   end
 
