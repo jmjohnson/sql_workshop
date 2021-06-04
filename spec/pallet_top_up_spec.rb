@@ -138,6 +138,8 @@ describe 'PalletTopUp' do
   context 'Read Committed' do
 
     it 'can overfill pallets' do
+      # Using this Txn isolation level
+      # Be explicit about what lines cannot be moved/altered.
       pallet = Pallet.create(capacity: 1)
       pallet_id = pallet.id
 
