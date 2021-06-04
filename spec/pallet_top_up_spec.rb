@@ -264,12 +264,12 @@ describe 'PalletTopUp' do
               SQL
                 .then { |result| result.to_a.first["capacity"] }
 
-              puts "interferer #{capacity}"
               if capacity > 0
                 ctx.execute <<~SQL
                   UPDATE pallets SET capacity = capacity - 1 WHERE id = #{pallet_id}
                 SQL
               end
+              puts "interfearer: finished updating"
 
               ctx.execute <<~SQL
                 COMMIT;
@@ -299,6 +299,7 @@ describe 'PalletTopUp' do
             ctx.execute <<~SQL
               UPDATE pallets SET capacity = capacity - 1 WHERE id = #{pallet_id}
             SQL
+            puts "main txn: finished updating"
 
             ctx.execute <<~SQL
               COMMIT;
