@@ -17,6 +17,14 @@ class TxnHelper
 end
 
 class ReadCommittedTxn < TxnHelper
+  class << self
+    def run
+      txn = new { |ctx| yield ctx }
+      txn.resume
+      txn.resume :commit
+    end
+  end
+
   def initialize
     super do |ctx|
       ctx.execute <<~SQL
@@ -189,7 +197,7 @@ describe 'PalletTopUp' do
 
       interfering_txn = AddToPalletTxn.new(pallet: pallet, by: 1)
 
-      ReadCommittedTxn.new do |ctx|
+      ReadCommittedTxn.run do |ctx|
         capacity = ctx.execute(<<~SQL)
           SELECT capacity FROM pallets WHERE id = #{pallet_id}
         SQL
@@ -224,7 +232,7 @@ describe 'PalletTopUp' do
 
       interfering_txn = AddToPalletTxn.new(pallet: pallet, by: 10)
 
-      ReadCommittedTxn.new do |ctx|
+      ReadCommittedTxn.run do |ctx|
         capacity = ctx.execute(<<~SQL)
           SELECT capacity FROM pallets WHERE id = #{pallet_id}
         SQL
