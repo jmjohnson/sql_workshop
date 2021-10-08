@@ -249,48 +249,6 @@ describe 'PalletTopUp' do
       expect(pallet.reload.capacity).to eq(0)
     end
 
-    it 'the order of query arrival can greatly influence execution time' do
-      # What's the useful bit of this example anyway? What do I want to teach?
-      # -> That lock timeouts are good. That our application doesn't use them. That your query can hang and time out
-      # other's web request.
-      #
-      # Make this example such that: The order in which queries arrive demonstrates big differences in completion time.
-      pallet = Pallet.create(capacity: 0)
-      pallet_id = pallet.id
-      txn1, txn2 = [peek_on_capacity(pallet_id)] * 2
-
-      with_fresh_connection do |ctx|
-        ctx.execute <<~SQL
-          BEGIN;
-        SQL
-
-        ctx.execute <<~SQL
-          SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
-        SQL
-
-
-        txn1.start
-        sleep 1
-
-        ctx.execute(<<~SQL)
-          ALTER TABLE pallets ADD COLUMN zorph INT;
-        SQL
-        puts "LOCKED and altering table!"
-        # While it's hard at work...
-        txn2.start
-        sleep 2
-
-        puts "about to rollback"
-        ctx.execute <<~SQL
-          ROLLBACK;
-        SQL
-      end
-
-      txn2.join
-      txn1.join
-      # Why does the ALTER TABLE make txn2 wait? It's only querying a field that the ALTER doesn't touch.
-    end
-
     context 'with explicit locking' do
       # https://www.postgresql.org/docs/11/explicit-locking.html
 
