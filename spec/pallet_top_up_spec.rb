@@ -155,7 +155,7 @@ describe 'PalletTopUp' do
         SQL
           .then { |result| result.to_a.first["capacity"] }
 
-        interfering_txn.run_to_end
+        interfering_txn.resume
 
         if capacity > 0
           ctx.execute <<~SQL
