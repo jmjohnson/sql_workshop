@@ -173,7 +173,8 @@ describe 'PalletTopUp' do
       # guarantee no consistent view of the database between select statements.
 
       # Change the code such that this expectation passes.
-      # expect(pallet.reload.capacity).to eq(0)
+      pending("Make this expectation pass!")
+      expect(pallet.reload.capacity).to eq(0)
     end
 
     # Done.
@@ -211,7 +212,8 @@ describe 'PalletTopUp' do
       # Why was the update lost here?
 
       # Change the code such that this expectation passes.
-      # expect(pallet.reload.capacity).to eq(40)
+      pending("Make this expectation pass!")
+      expect(pallet.reload.capacity).to eq(40)
     end
 
     it 'the order of query arrival can greatly influence execution time' do
