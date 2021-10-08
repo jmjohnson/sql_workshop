@@ -4,19 +4,15 @@ require 'spec_helper.rb'
 
 class TxnHelper
   def initialize(&block)
-    @callable = block
+    @fiber ||= Fiber.new { block.call }
   end
 
   def start
-    @thread = Thread.new { @callable.call }
+    fiber.resume
   end
 
-  def join
-    @thread.join
-  end
-
-  def run_to_end
-    start.join
+  def resume
+    fiber.resume
   end
 end
 
