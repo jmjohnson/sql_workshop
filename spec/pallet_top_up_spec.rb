@@ -8,11 +8,11 @@ class TxnHelper
   end
 
   def start
-    fiber.resume
+    @fiber.resume
   end
 
   def resume
-    fiber.resume
+    @fiber.resume
   end
 end
 
