@@ -243,7 +243,8 @@ describe 'PalletTopUp' do
 
       # Why was the update lost here?
 
-      # Change the code such that this expectation passes.
+      # Copy this test and remove the pending. Then make the expectation pass; you may not change the expectation.
+      # When you believe you can persuade JJ your answer will work in the general case you are done.
       pending("Make this expectation pass!")
       expect(pallet.reload.capacity).to eq(0)
     end
