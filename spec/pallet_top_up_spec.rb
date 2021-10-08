@@ -218,31 +218,22 @@ describe 'PalletTopUp' do
       expect(pallet.reload.capacity).to eq(0)
     end
 
-    # Done.
     it 'can lose updates' do
-      pallet = Pallet.create(capacity: 0)
+      pallet = Pallet.create(capacity: 20)
       pallet_id = pallet.id
 
-      interfering_txn = IncrementingTxn.new(pallet_id, by: 20)
+      interfering_txn = AddToPalletTxn.new(pallet: pallet, by: 10)
 
-      with_fresh_connection do |ctx|
-        ctx.execute <<~SQL
-          BEGIN;
-        SQL
-
-        ctx.execute <<~SQL
-          SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
-        SQL
-
+      ReadCommittedTxn.new do |ctx|
         capacity = ctx.execute(<<~SQL)
           SELECT capacity FROM pallets WHERE id = #{pallet_id}
         SQL
           .then { |result| result.to_a.first["capacity"] }
 
-        interfering_txn.run_to_end
+        interfering_txn.run
 
         ctx.execute <<~SQL
-          UPDATE pallets SET capacity = #{capacity} + 20 WHERE id = #{pallet_id}
+          UPDATE pallets SET capacity = #{capacity} - 10 WHERE id = #{pallet_id}
         SQL
 
         ctx.execute <<~SQL
@@ -254,7 +245,7 @@ describe 'PalletTopUp' do
 
       # Change the code such that this expectation passes.
       pending("Make this expectation pass!")
-      expect(pallet.reload.capacity).to eq(40)
+      expect(pallet.reload.capacity).to eq(0)
     end
 
     it 'the order of query arrival can greatly influence execution time' do
