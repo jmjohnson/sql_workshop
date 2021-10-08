@@ -4,21 +4,70 @@ require 'spec_helper.rb'
 
 class TxnHelper
   def initialize(&block)
-    @fiber ||= Fiber.new { block.call }
+    @fiber ||= Fiber.new do
+      with_fresh_connection do |ctx|
+        block.call(ctx)
+      end
+    end
   end
 
-  def start
-    @fiber.resume
+  def resume(*args)
+    @fiber.resume(*args)
+  end
+end
+
+class ReadCommittedTxn < TxnHelper
+  def initialize
+    super do |ctx|
+      ctx.execute <<~SQL
+        BEGIN;
+      SQL
+
+      ctx.execute <<~SQL
+        SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+      SQL
+
+      yield ctx
+
+      terminate_as = Fiber.yield
+
+      method(terminate_as).call(ctx)
+    end
   end
 
-  def resume
-    @fiber.resume
+  private
+
+  def commit(ctx)
+    ctx.execute <<~SQL
+      COMMIT;
+    SQL
+  end
+
+  def rollback(ctx)
+    ctx.execute <<~SQL
+      ROLLBACK;
+    SQL
+  end
+end
+
+class AddToPalletTxn
+  def initialize(pallet:, by: -1)
+    @ctx = ReadCommittedTxn.new do |ctx|
+      ctx.execute <<~SQL
+        UPDATE pallets SET capacity = capacity + #{by} WHERE id = #{pallet.id}
+      SQL
+    end
+  end
+
+  def run
+    @ctx.resume
+    @ctx.resume :commit
   end
 end
 
 class DecrementingTxn < TxnHelper
   def initialize(pallet_id)
-    update = Proc.new do
+    super() do
       with_fresh_connection do |ctx|
         ctx.execute <<~SQL
           BEGIN;
@@ -44,8 +93,6 @@ class DecrementingTxn < TxnHelper
         SQL
       end
     end
-
-    super(&update)
   end
 end
 
@@ -102,9 +149,8 @@ def peek_on_capacity(pallet_id)
 
       puts "user txn found capacity: #{capacity}"
 
-      sleep 1
       ctx.execute <<~SQL
-          COMMIT;
+        COMMIT;
       SQL
     end
   end
@@ -131,31 +177,25 @@ describe 'PalletTopUp' do
 
   # Side idea: pallet has a "vacancy number" the app tries to update
 
-  context 'Read Committed' do
+  # Universal example
+  # - a pallet with 1 capacity
+  # - if there are no "pallet diagrams" skus on the pallet, add one to the inventory table and decrement capacity
 
+  context 'Read Committed' do
     it 'can overfill pallets' do
-      # Using this Txn isolation level
-      # Be explicit about what lines cannot be moved/altered.
+      # Two transactions try to use the last remaining capacity.
       pallet = Pallet.create(capacity: 1)
       pallet_id = pallet.id
 
-      interfering_txn = DecrementingTxn.new(pallet_id)
+      interfering_txn = AddToPalletTxn.new(pallet: pallet, by: -1)
 
-      with_fresh_connection do |ctx|
-        ctx.execute <<~SQL
-          BEGIN;
-        SQL
-
-        ctx.execute <<~SQL
-          SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
-        SQL
-
+      ReadCommittedTxn.new do |ctx|
         capacity = ctx.execute(<<~SQL)
           SELECT capacity FROM pallets WHERE id = #{pallet_id}
         SQL
           .then { |result| result.to_a.first["capacity"] }
 
-        interfering_txn.resume
+        interfering_txn.run
 
         if capacity > 0
           ctx.execute <<~SQL
@@ -172,7 +212,8 @@ describe 'PalletTopUp' do
       # Lesson: Read Committed transaction isolation pretty much just makes sure your writes are atomic, they
       # guarantee no consistent view of the database between select statements.
 
-      # Change the code such that this expectation passes.
+      # Copy this test and remove the pending. Then make the expectation pass; you may not change the expectation.
+      # When you believe you can persuade JJ your answer will work in the general case you are done.
       pending("Make this expectation pass!")
       expect(pallet.reload.capacity).to eq(0)
     end
