@@ -51,10 +51,10 @@ class ReadCommittedTxn < TxnHelper
 end
 
 class AddToPalletTxn
-  def initialize(pallet:, by: -1)
+  def initialize(pallet:, by: 1)
     @ctx = ReadCommittedTxn.new do |ctx|
       ctx.execute <<~SQL
-        UPDATE pallets SET capacity = capacity + #{by} WHERE id = #{pallet.id}
+        UPDATE pallets SET capacity = capacity - #{by} WHERE id = #{pallet.id}
       SQL
     end
   end
@@ -187,7 +187,7 @@ describe 'PalletTopUp' do
       pallet = Pallet.create(capacity: 1)
       pallet_id = pallet.id
 
-      interfering_txn = AddToPalletTxn.new(pallet: pallet, by: -1)
+      interfering_txn = AddToPalletTxn.new(pallet: pallet, by: 1)
 
       ReadCommittedTxn.new do |ctx|
         capacity = ctx.execute(<<~SQL)
